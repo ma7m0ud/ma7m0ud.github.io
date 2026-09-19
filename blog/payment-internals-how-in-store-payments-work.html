@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Payment Internals: How In-Store Card Payments Work — Mahmoud Abdelrahman</title>
+<meta name="description" content="A walkthrough of what actually happens between tapping your card and seeing 'Approved' — terminal, acquirer, card network, and issuer.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/css/style.css">
+</head>
+<body>
+
+<header>
+  <nav class="container">
+    <a href="../index.html" class="brand">Mahmoud <span>Abdelrahman</span></a>
+    <button class="nav-toggle" aria-label="Toggle navigation">☰</button>
+    <div class="nav-links">
+      <a href="../index.html#about">About</a>
+      <a href="../index.html#experience">Experience</a>
+      <a href="../index.html#skills">Skills</a>
+      <a href="../blog.html">Blog</a>
+      <a href="../index.html#contact">Contact</a>
+    </div>
+  </nav>
+</header>
+
+<div class="article-header">
+  <div class="container">
+    <div class="meta-row">
+      <span class="series-tag">Payment Internals</span>
+      <span>·</span>
+      <span>Part 1</span>
+      <span>·</span>
+      <span>7 min read</span>
+    </div>
+    <h1>How an In-Store Card Payment Actually Works</h1>
+    <p class="dek">
+      You tap your card, wait about a second, and see "Approved." In that
+      second, your transaction visits at least four separate companies. This
+      is the first post in <strong>Payment Internals</strong>, a series where
+      we open up the machinery behind moving money — starting with the trip
+      a single purchase takes.
+    </p>
+  </div>
+</div>
+
+<article class="article">
+
+<h2>The five players</h2>
+<p>
+  Before following the money, it helps to know who's actually involved.
+  Every in-store card payment has the same five parties, regardless of
+  which bank or network you use:
+</p>
+
+<table class="data-table">
+  <thead>
+    <tr><th>Player</th><th>Role</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Cardholder</td><td>You — the person tapping, inserting, or swiping a card.</td></tr>
+    <tr><td>Merchant / Terminal</td><td>The store and the POS terminal that captures the card data and builds the transaction message.</td></tr>
+    <tr><td>Acquirer</td><td>The merchant's bank (or a processor acting for it) — the entry point into the card networks.</td></tr>
+    <tr><td>Card Network</td><td>Visa, Mastercard, and similar — the rails that route messages between acquirers and issuers, and set the rules everyone plays by.</td></tr>
+    <tr><td>Issuer</td><td>The cardholder's bank — the one that actually decides "approve" or "decline," and whose money is on the line.</td></tr>
+  </tbody>
+</table>
+
+<h2>The authorization flow</h2>
+<p>
+  When the terminal asks "approve or decline," it isn't a single phone call
+  — it's a request relayed hop by hop to the issuer and a response relayed
+  back the same way. Here's the round trip:
+</p>
+
+<div class="diagram-wrap">
+<svg viewBox="0 0 700 230" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Diagram of a card payment flowing from cardholder to terminal, acquirer, card network, and issuer, with the response returning the same path">
+  <defs>
+    <marker id="arrowReq" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"></path>
+    </marker>
+    <marker id="arrowRes" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="var(--accent-2)"></path>
+    </marker>
+  </defs>
+
+  <!-- Boxes -->
+  <g font-family="Inter, sans-serif">
+    <!-- Cardholder -->
+    <rect x="10" y="80" width="100" height="64" rx="10" fill="var(--card)" stroke="var(--border)" stroke-width="1.5"></rect>
+    <text x="60" y="106" text-anchor="middle" fill="var(--text)" font-size="12" font-weight="600">Cardholder</text>
+    <text x="60" y="126" text-anchor="middle" fill="var(--text-dim)" font-size="10">taps card</text>
+
+    <!-- Terminal -->
+    <rect x="155" y="80" width="100" height="64" rx="10" fill="var(--card)" stroke="var(--border)" stroke-width="1.5"></rect>
+    <text x="205" y="100" text-anchor="middle" fill="var(--text)" font-size="12" font-weight="600">POS</text>
+    <text x="205" y="114" text-anchor="middle" fill="var(--text)" font-size="12" font-weight="600">Terminal</text>
+    <text x="205" y="132" text-anchor="middle" fill="var(--text-dim)" font-size="10">merchant</text>
+
+    <!-- Acquirer -->
+    <rect x="300" y="80" width="100" height="64" rx="10" fill="var(--card)" stroke="var(--border)" stroke-width="1.5"></rect>
+    <text x="350" y="106" text-anchor="middle" fill="var(--text)" font-size="12" font-weight="600">Acquirer</text>
+    <text x="350" y="126" text-anchor="middle" fill="var(--text-dim)" font-size="10">merchant's bank</text>
+
+    <!-- Card Network -->
+    <rect x="445" y="80" width="100" height="64" rx="10" fill="var(--card)" stroke="var(--border)" stroke-width="1.5"></rect>
+    <text x="495" y="100" text-anchor="middle" fill="var(--text)" font-size="12" font-weight="600">Card</text>
+    <text x="495" y="114" text-anchor="middle" fill="var(--text)" font-size="12" font-weight="600">Network</text>
+    <text x="495" y="132" text-anchor="middle" fill="var(--text-dim)" font-size="10">e.g. Visa</text>
+
+    <!-- Issuer -->
+    <rect x="590" y="80" width="100" height="64" rx="10" fill="var(--card)" stroke="var(--border)" stroke-width="1.5"></rect>
+    <text x="640" y="106" text-anchor="middle" fill="var(--text)" font-size="12" font-weight="600">Issuer</text>
+    <text x="640" y="126" text-anchor="middle" fill="var(--text-dim)" font-size="10">cardholder's bank</text>
+  </g>
+
+  <!-- Request arrows (top lane, left to right) -->
+  <g stroke="var(--accent)" stroke-width="2">
+    <line x1="114" y1="98" x2="151" y2="98" marker-end="url(#arrowReq)"></line>
+    <line x1="259" y1="98" x2="296" y2="98" marker-end="url(#arrowReq)"></line>
+    <line x1="404" y1="98" x2="441" y2="98" marker-end="url(#arrowReq)"></line>
+    <line x1="549" y1="98" x2="586" y2="98" marker-end="url(#arrowReq)"></line>
+  </g>
+  <g font-family="Inter, sans-serif" font-size="11" font-weight="700" fill="#04121a">
+    <circle cx="132" cy="98" r="9" fill="var(--accent)"></circle>
+    <text x="132" y="102" text-anchor="middle">1</text>
+    <circle cx="277" cy="98" r="9" fill="var(--accent)"></circle>
+    <text x="277" y="102" text-anchor="middle">2</text>
+    <circle cx="422" cy="98" r="9" fill="var(--accent)"></circle>
+    <text x="422" y="102" text-anchor="middle">3</text>
+    <circle cx="567" cy="98" r="9" fill="var(--accent)"></circle>
+    <text x="567" y="102" text-anchor="middle">4</text>
+  </g>
+
+  <!-- Response arrows (bottom lane, right to left) -->
+  <g stroke="var(--accent-2)" stroke-width="2">
+    <line x1="586" y1="126" x2="549" y2="126" marker-end="url(#arrowRes)"></line>
+    <line x1="441" y1="126" x2="404" y2="126" marker-end="url(#arrowRes)"></line>
+    <line x1="296" y1="126" x2="259" y2="126" marker-end="url(#arrowRes)"></line>
+    <line x1="151" y1="126" x2="114" y2="126" marker-end="url(#arrowRes)"></line>
+  </g>
+  <g font-family="Inter, sans-serif" font-size="11" font-weight="700" fill="#fff">
+    <circle cx="567" cy="126" r="9" fill="var(--accent-2)"></circle>
+    <text x="567" y="130" text-anchor="middle">5</text>
+    <circle cx="422" cy="126" r="9" fill="var(--accent-2)"></circle>
+    <text x="422" y="130" text-anchor="middle">6</text>
+    <circle cx="277" cy="126" r="9" fill="var(--accent-2)"></circle>
+    <text x="277" y="130" text-anchor="middle">7</text>
+    <circle cx="132" cy="126" r="9" fill="var(--accent-2)"></circle>
+    <text x="132" y="130" text-anchor="middle">8</text>
+  </g>
+
+  <!-- Legend -->
+  <g font-family="Inter, sans-serif" font-size="11">
+    <circle cx="18" cy="190" r="6" fill="var(--accent)"></circle>
+    <text x="30" y="194" fill="var(--text-dim)">Request (authorization)</text>
+    <circle cx="200" cy="190" r="6" fill="var(--accent-2)"></circle>
+    <text x="212" y="194" fill="var(--text-dim)">Response (approve / decline)</text>
+  </g>
+</svg>
+</div>
+
+<p>The whole round trip — all eight hops — typically completes in well under two seconds:</p>
+
+<ol>
+  <li><strong>Tap, insert, or swipe.</strong> The terminal reads the card (chip, contactless, or magstripe) and captures the PAN, expiry, and cryptographic data needed for the request.</li>
+  <li><strong>Terminal → Acquirer.</strong> The terminal builds an authorization request and sends it to the acquirer's host, typically over a leased line, VPN, or the internet via a payment gateway.</li>
+  <li><strong>Acquirer → Card Network.</strong> The acquirer looks at the card's BIN (the first 6–8 digits of the PAN) to identify which network issued it, and forwards the request onto that network.</li>
+  <li><strong>Card Network → Issuer.</strong> The network routes the request to the specific bank that issued the card.</li>
+  <li><strong>Issuer decides.</strong> The issuer checks the account: enough balance or credit, card not reported lost/stolen, transaction doesn't look fraudulent. It responds approve or decline.</li>
+  <li><strong>Issuer → Card Network.</strong> The response heads back the way the request came.</li>
+  <li><strong>Card Network → Acquirer.</strong> The network delivers the response to the acquirer that submitted the request.</li>
+  <li><strong>Acquirer → Terminal.</strong> The terminal gets its answer and shows "Approved" or "Declined" — and the cardholder finally sees the result.</li>
+</ol>
+
+<h2>What the messages actually look like</h2>
+<p>
+  Every one of those hops speaks the same language: <strong>ISO 8583</strong>,
+  a messaging standard from the 1980s that's still what almost every card
+  transaction runs on today. The request the terminal builds in step 2 and
+  the response the issuer sends in step 5 are both ISO 8583 messages — a
+  message type indicator, a bitmap saying which fields are present, and the
+  fields themselves packed back to back.
+</p>
+<p>
+  That's deliberately as far as we're going here. The next post in this
+  series takes a single one of these messages apart byte by byte, and
+  writes a small C++ parser to read it.
+</p>
+
+<h2>Approval isn't payment — yet</h2>
+<p>
+  Here's the part that surprises people: when the terminal shows
+  "Approved," no money has actually moved. The issuer has confirmed the
+  card is valid and put a hold on the funds — that's it. The real transfer
+  of money happens later, in a separate batch process called
+  <strong>clearing and settlement</strong>, usually run overnight.
+</p>
+<p>
+  At the end of the day, the merchant's terminal (or payment processor)
+  bundles up all of the day's approved transactions and submits them for
+  clearing. The card network nets out what every acquirer owes every
+  issuer, money actually moves between the banks, and — a day or two later
+  — the acquirer deposits the merchant's funds, minus interchange and
+  processing fees. The authorization you saw at checkout was really just
+  step one of a two-step process.
+</p>
+
+<h2>Up next</h2>
+<p>
+  Now that we've seen the whole trip at a high level, the next post zooms
+  into a single hop — the authorization request itself — and takes it
+  apart field by field.
+</p>
+<div class="repo-card">
+  <div>
+    <div class="repo-name">Payment Internals · Part 2</div>
+    <p>ISO 8583: Parsing a Purchase Message in C++ — the message format, and a working parser.</p>
+  </div>
+  <a href="iso8583-purchase-message-cpp.html" class="btn btn-outline">Read Part 2</a>
+</div>
+
+<div class="article-nav">
+  <a href="../blog.html">&larr; Back to all posts</a>
+</div>
+
+</article>
+
+<footer>
+  <div class="container">
+    &copy; <span id="year"></span> Mahmoud Abdelrahman. Built with plain HTML, CSS &amp; JS, hosted on GitHub Pages.
+  </div>
+</footer>
+
+<script src="../assets/js/main.js"></script>
+</body>
+</html>

@@ -30,17 +30,18 @@
 <div class="article-header">
   <div class="container">
     <div class="meta-row">
-      <span>ISO 8583</span>
+      <span class="series-tag">Payment Internals</span>
       <span>·</span>
-      <span>C++</span>
+      <span>Part 2 · Deep Dive</span>
       <span>·</span>
       <span>9 min read</span>
     </div>
     <h1>ISO 8583: Parsing a Purchase Message in C++</h1>
     <p class="dek">
-      Every card purchase you make turns into a message like the one below before
-      it ever reaches your bank. We'll build one by hand, take it apart field by
-      field, and then write a small C++ parser that reads it back.
+      In <a href="payment-internals-how-in-store-payments-work.html">Part 1</a> we followed a card
+      payment from terminal to issuer and back. Here we zoom into a single hop — the authorization
+      request the terminal sends the acquirer — and take it apart byte by byte, then write a small
+      C++ parser that reads it back.
     </p>
   </div>
 </div>
@@ -335,7 +336,9 @@ DE49  Currency Code, Transaction            : 840</code></pre>
 </p>
 
 <div class="article-nav">
-  <a href="../blog.html">&larr; Back to all posts</a>
+  <a href="payment-internals-how-in-store-payments-work.html">&larr; Part 1: How In-Store Card Payments Work</a>
+  &nbsp;·&nbsp;
+  <a href="../blog.html">All posts</a>
 </div>
 
 </article>
