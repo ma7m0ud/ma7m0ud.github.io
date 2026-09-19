@@ -95,6 +95,13 @@ nav.container {
 
 /* ---------- Hero ---------- */
 .hero { padding-top: 96px; padding-bottom: 96px; border-bottom: 1px solid var(--border); }
+.hero-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 48px;
+}
+.hero-text { flex: 1; min-width: 0; }
 .hero h1 { font-size: 2.6rem; }
 .hero .role {
   background: linear-gradient(90deg, var(--accent), var(--accent-2));
@@ -103,6 +110,16 @@ nav.container {
   color: transparent;
 }
 .hero p.lede { font-size: 1.1rem; margin-bottom: 32px; }
+
+.hero-photo { flex-shrink: 0; }
+.avatar {
+  width: 220px;
+  height: 220px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 3px solid var(--border);
+  box-shadow: 0 0 0 6px rgba(34, 211, 238, 0.08);
+}
 
 .cta-row { display: flex; gap: 14px; flex-wrap: wrap; }
 
@@ -259,6 +276,10 @@ footer {
 
   .hero h1 { font-size: 2rem; }
   section { padding: 56px 0; }
+
+  .hero-inner { flex-direction: column-reverse; text-align: center; gap: 28px; }
+  .hero .cta-row { justify-content: center; }
+  .avatar { width: 160px; height: 160px; }
 
   .job { grid-template-columns: 1fr; }
   .job .meta { margin-bottom: 4px; }
