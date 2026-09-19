@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ISO 8583: Parsing a Purchase Message in C++ — Mahmoud Abdelrahman</title>
+<meta name="description" content="A walkthrough of a real ISO 8583 purchase (0200) message — the bitmap, the data elements, and a working C++ parser you can build and run yourself.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+<link rel="stylesheet" href="../assets/css/style.css">
+</head>
+<body>
+
+<header>
+  <nav class="container">
+    <a href="../index.html" class="brand">Mahmoud <span>Abdelrahman</span></a>
+    <button class="nav-toggle" aria-label="Toggle navigation">☰</button>
+    <div class="nav-links">
+      <a href="../index.html#about">About</a>
+      <a href="../index.html#experience">Experience</a>
+      <a href="../index.html#skills">Skills</a>
+      <a href="../blog.html">Blog</a>
+      <a href="../index.html#contact">Contact</a>
+    </div>
+  </nav>
+</header>
+
+<div class="article-header">
+  <div class="container">
+    <div class="meta-row">
+      <span>ISO 8583</span>
+      <span>·</span>
+      <span>C++</span>
+      <span>·</span>
+      <span>9 min read</span>
+    </div>
+    <h1>ISO 8583: Parsing a Purchase Message in C++</h1>
+    <p class="dek">
+      Every card purchase you make turns into a message like the one below before
+      it ever reaches your bank. We'll build one by hand, take it apart field by
+      field, and then write a small C++ parser that reads it back.
+    </p>
+  </div>
+</div>
+
+<article class="article">
+
+<h2>What is ISO 8583?</h2>
+<p>
+  ISO 8583 is the messaging standard almost every card payment runs on. When you
+  tap your card at a terminal, the terminal doesn't send your bank a friendly
+  JSON payload — it builds an ISO 8583 message and sends it to an acquirer, who
+  routes it through a card network to your issuing bank, which sends a
+  matching ISO 8583 <em>response</em> back the same way.
+</p>
+<p>
+  The standard has been around since 1987 and is deliberately compact: every
+  message is a <strong>Message Type Indicator (MTI)</strong>, a
+  <strong>bitmap</strong> that says which fields are present, and then the
+  fields themselves, packed back to back with no delimiters. That compactness
+  is also what makes it a little intimidating to read the first time — there's
+  no JSON key telling you where the PAN starts. You have to know the shape of
+  the message to parse it at all.
+</p>
+
+<h2>The message we're parsing</h2>
+<p>
+  Here's a realistic (but fictional) purchase authorization request — MTI
+  <code>0200</code> — for a $100.00 purchase, ASCII-encoded with the bitmap
+  written out in hex so it's readable:
+</p>
+
+<div class="code-label">Sample message</div>
+<pre><code class="language-text">0200723C048020C08000164111111111111111100000000000001000001151200000001231200000115281205100374111111111111111=28122010000000000000TERM0001MERCHANT0000001840</code></pre>
+
+<p>
+  That's a single, unbroken string — 156 characters, no spaces. Nothing about
+  it tells you where one field ends and the next begins unless you already
+  know the rules. Let's take it apart.
+</p>
+
+<h2>Breaking down the message</h2>
+
+<h3>1. The MTI</h3>
+<p>
+  The first 4 characters, <code>0200</code>, are the MTI. It tells you the
+  version of the spec, the message class, and what stage of the transaction
+  this is:
+</p>
+<ul>
+  <li><strong>0</strong> — ISO 8583:1987 version</li>
+  <li><strong>2</strong> — Financial message (a purchase, withdrawal, etc.)</li>
+  <li><strong>0</strong> — Request (as opposed to a response, advice, or notification)</li>
+  <li><strong>0</strong> — Sent by the acquirer (as opposed to <code>0201</code>-style repeats)</li>
+</ul>
+<p>
+  A matching approval would come back as MTI <code>0210</code> — same class,
+  but a response.
+</p>
+
+<h3>2. The bitmap</h3>
+<p>
+  The next 16 characters, <code>723C048020C08000</code>, are the primary
+  bitmap: 8 bytes, 64 bits, one bit per data element (DE1 through DE64). If
+  bit <em>n</em> is 1, DE<em>n</em> is present somewhere later in the message.
+  If it's 0, that field is simply absent — there's no placeholder, no null,
+  it's just not there.
+</p>
+<p>
+  Decoded, this bitmap flags DE 2, 3, 4, 7, 11, 12, 13, 14, 22, 25, 35, 41,
+  42, and 49. Bit 1 itself is reserved to say "there's a secondary bitmap
+  too, covering DE65–128" — it's 0 here, so we know the message stops at
+  DE64 and there's nothing exotic hiding after it.
+</p>
+<div class="callout">
+  <strong>Why hex?</strong> The bitmap is really 8 raw bytes. Writing each
+  byte as 2 hex characters (16 characters total) makes it possible to send
+  the whole message as printable ASCII, which is what a lot of real-world
+  host simulators and test tools do. Some live networks send the bitmap as
+  true binary instead — same 64 bits, just not printable text. Our parser
+  below assumes the hex form.
+</div>
+
+<h3>3. The data elements</h3>
+<p>
+  After the bitmap, fields are packed in ascending DE order with no
+  separators. Each field is one of two shapes:
+</p>
+<ul>
+  <li><strong>Fixed-length</strong> — you already know exactly how many characters to read, because the spec defines it. DE3 (processing code) is always 6 digits.</li>
+  <li><strong>Variable-length (LLVAR / LLLVAR)</strong> — a short length prefix comes first (2 digits for LLVAR, 3 for LLLVAR), telling you how many characters follow. DE2 (the PAN) is LLVAR because card numbers aren't all the same length.</li>
+</ul>
+<p>Here's every field in our message, in the order they actually appear:</p>
+
+<table class="data-table">
+  <thead>
+    <tr><th>DE</th><th>Name</th><th>Format</th><th>Raw value</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>2</td><td>Primary Account Number</td><td class="mono">LLVAR</td><td class="mono">16 4111111111111111</td><td>The card number. LLVAR because PANs range roughly 12–19 digits.</td></tr>
+    <tr><td>3</td><td>Processing Code</td><td class="mono">6</td><td class="mono">000000</td><td>Purchase, from the primary account, no cashback.</td></tr>
+    <tr><td>4</td><td>Amount, Transaction</td><td class="mono">12</td><td class="mono">000000010000</td><td>10000 minor units → $100.00.</td></tr>
+    <tr><td>7</td><td>Transmission Date &amp; Time</td><td class="mono">10</td><td class="mono">0115120000</td><td>MMDDhhmmss, the switch's clock: Jan 15, 12:00:00.</td></tr>
+    <tr><td>11</td><td>STAN</td><td class="mono">6</td><td class="mono">000123</td><td>System Trace Audit Number — unique per terminal per day, used to match requests to responses.</td></tr>
+    <tr><td>12</td><td>Local Transaction Time</td><td class="mono">6</td><td class="mono">120000</td><td>hhmmss at the terminal.</td></tr>
+    <tr><td>13</td><td>Local Transaction Date</td><td class="mono">4</td><td class="mono">0115</td><td>MMDD at the terminal.</td></tr>
+    <tr><td>14</td><td>Expiration Date</td><td class="mono">4</td><td class="mono">2812</td><td>YYMM → card expires Dec 2028.</td></tr>
+    <tr><td>22</td><td>POS Entry Mode</td><td class="mono">3</td><td class="mono">051</td><td>How the card data was captured — 051 is a contactless EMV chip read.</td></tr>
+    <tr><td>25</td><td>POS Condition Code</td><td class="mono">2</td><td class="mono">00</td><td>Normal, card-present presentment.</td></tr>
+    <tr><td>35</td><td>Track 2 Data</td><td class="mono">LLVAR</td><td class="mono">37 4111…=28122010…</td><td>PAN + expiry + service code + discretionary data, as read off the card.</td></tr>
+    <tr><td>41</td><td>Card Acceptor Terminal ID</td><td class="mono">8</td><td class="mono">TERM0001</td><td>Identifies the physical terminal.</td></tr>
+    <tr><td>42</td><td>Card Acceptor ID Code</td><td class="mono">15</td><td class="mono">MERCHANT0000001</td><td>Identifies the merchant's account with the acquirer.</td></tr>
+    <tr><td>49</td><td>Currency Code, Transaction</td><td class="mono">3</td><td class="mono">840</td><td>ISO 4217 numeric code — 840 is USD.</td></tr>
+  </tbody>
+</table>
+
+<h3>What else could be in there</h3>
+<p>
+  A real-world <code>0200</code> often carries more than these 14 fields, and
+  the matching <code>0210</code> response introduces a few of its own. Fields
+  you'll run into constantly but that don't appear in our example:
+</p>
+
+<table class="data-table">
+  <thead>
+    <tr><th>DE</th><th>Name</th><th>Where you'll see it</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>18</td><td>Merchant Category Code</td><td>Classifies the merchant's business type (e.g. 5411 = grocery stores) — drives interchange rates and rewards categories.</td></tr>
+    <tr><td>32</td><td>Acquiring Institution ID</td><td>Identifies which acquirer is routing the transaction.</td></tr>
+    <tr><td>37</td><td>Retrieval Reference Number</td><td>A reference number used to trace a transaction across acquirer, network, and issuer systems.</td></tr>
+    <tr><td>38</td><td>Authorization ID Response</td><td>In the 0210 response — the approval code that ends up printed on the receipt.</td></tr>
+    <tr><td>39</td><td>Response Code</td><td>In the 0210 response — 00 for approved, everything else is a decline or referral reason.</td></tr>
+    <tr><td>43</td><td>Card Acceptor Name/Location</td><td>Merchant name and city — what shows up on your statement.</td></tr>
+    <tr><td>52</td><td>PIN Block</td><td>Encrypted PIN, present on PIN-based debit transactions.</td></tr>
+    <tr><td>55</td><td>ICC (EMV) Data</td><td>Raw chip cryptogram and EMV tags, TLV-encoded — its own rabbit hole entirely.</td></tr>
+    <tr><td>64 / 128</td><td>MAC</td><td>A message authentication code securing the message against tampering in transit.</td></tr>
+  </tbody>
+</table>
+<p>
+  None of these are hard individually — they're all still just "fixed length"
+  or "LLVAR/LLLVAR" under the hood. There are just a lot of them (the full
+  spec defines up to 128 fields), which is why real implementations lean on a
+  field dictionary instead of hardcoding each one.
+</p>
+
+<h2>Writing the parser</h2>
+<p>
+  With the shape of the message established, the parser itself is short:
+  decode the bitmap, then walk DE1 through DE64, and for every bit that's
+  set, pull out a field using its format from a lookup table.
+</p>
+
+<h3>1. Describing a field</h3>
+<p>
+  Every data element needs three things: a name (for humans), a format (fixed
+  or variable), and a length (exact, or a max for LLVAR). A small struct and
+  a lookup table cover that:
+</p>
+
+<div class="code-label">iso8583_parser.hpp</div>
+<pre><code class="language-cpp">enum class FieldFormat {
+    Fixed,  // exact length, e.g. DE3 processing code is always 6 digits
+    LLVAR,  // 2-digit length prefix followed by that many characters
+};
+
+struct FieldSpec {
+    int de;
+    std::string name;
+    FieldFormat format;
+    int length; // for Fixed: exact length. For LLVAR: max length (informational only).
+};
+
+inline const std::map&lt;int, FieldSpec&gt;&amp; fieldDictionary() {
+    static const std::map&lt;int, FieldSpec&gt; dict = {
+        {2,  {2,  "Primary Account Number (PAN)",     FieldFormat::LLVAR, 19}},
+        {3,  {3,  "Processing Code",                   FieldFormat::Fixed, 6}},
+        {4,  {4,  "Amount, Transaction",                FieldFormat::Fixed, 12}},
+        // ...and so on for every field this parser knows about
+    };
+    return dict;
+}</code></pre>
+<p>
+  This is exactly the pattern real ISO 8583 libraries use, just with far
+  fewer fields — a production dictionary is a table of ~100+ entries instead
+  of 14.
+</p>
+
+<h3>2. Decoding the bitmap</h3>
+<p>
+  The bitmap is 16 hex characters — 8 bytes, 64 bits. To check "is DE22
+  present", we need bit 22, counting from the most significant bit of byte 1
+  as bit 1. That's a small bit of arithmetic per bit:
+</p>
+
+<div class="code-label">iso8583_parser.hpp</div>
+<pre><code class="language-cpp">static std::array&lt;bool, 65&gt; decodeBitmap(const std::string&amp; hex) {
+    std::array&lt;bool, 65&gt; present{};
+    for (int byteIdx = 0; byteIdx &lt; 8; ++byteIdx) {
+        unsigned int byteVal = std::stoul(hex.substr(byteIdx * 2, 2), nullptr, 16);
+        for (int bitIdx = 0; bitIdx &lt; 8; ++bitIdx) {
+            int de = byteIdx * 8 + bitIdx + 1; // DE1..DE64
+            bool isSet = (byteVal &amp; (0x80 &gt;&gt; bitIdx)) != 0;
+            present[de] = isSet;
+        }
+    }
+    return present;
+}</code></pre>
+<p>
+  <code>0x80 &gt;&gt; bitIdx</code> walks a single set bit across the byte from
+  the most significant bit down — that's the "MSB-first" convention the
+  bitmap uses. Get this backwards and every field after it reads garbage,
+  which is the single easiest mistake to make when writing your first parser.
+</p>
+
+<h3>3. Walking the fields</h3>
+<p>
+  With the bitmap decoded, parsing is a loop from DE2 to DE64: skip anything
+  not flagged, and for anything that is, read either a fixed number of
+  characters or an LLVAR length prefix followed by that many characters.
+</p>
+
+<div class="code-label">iso8583_parser.hpp</div>
+<pre><code class="language-cpp">for (int de = 2; de &lt;= 64; ++de) {
+    if (!present[de]) continue;
+
+    const FieldSpec&amp; spec = fieldDictionary().at(de);
+
+    if (spec.format == FieldFormat::Fixed) {
+        result.fields[de] = raw.substr(pos, spec.length);
+        pos += spec.length;
+    } else { // LLVAR
+        int len = std::stoi(raw.substr(pos, 2));
+        pos += 2;
+        result.fields[de] = raw.substr(pos, len);
+        pos += len;
+    }
+}</code></pre>
+<p>
+  <code>pos</code> only ever moves forward, by exactly as much as each field
+  says it consumed. There's no scanning for delimiters — the message format
+  guarantees you always know how far to jump next, as long as you correctly
+  parsed everything before it. (The full source on GitHub adds bounds
+  checking and error messages around this loop — trimmed here for
+  readability.)
+</p>
+
+<h3>4. Running it</h3>
+<p>A small <code>main()</code> parses the sample message and prints what it found:</p>
+
+<div class="code-label">Terminal</div>
+<pre><code class="language-bash">$ g++ -std=c++17 -Wall -Wextra -o parser src/main.cpp
+$ ./parser
+
+MTI: 0200
+
+DE2   Primary Account Number (PAN)          : 4111111111111111
+DE3   Processing Code                       : 000000
+DE4   Amount, Transaction                   : 000000010000
+DE7   Transmission Date &amp; Time              : 0115120000
+DE11  System Trace Audit Number (STAN)      : 000123
+DE12  Local Transaction Time                : 120000
+DE13  Local Transaction Date                : 0115
+DE14  Expiration Date (YYMM)                : 2812
+DE22  POS Entry Mode                        : 051
+DE25  POS Condition Code                    : 00
+DE35  Track 2 Data                          : 4111111111111111=28122010000000000000
+DE41  Card Acceptor Terminal ID             : TERM0001
+DE42  Card Acceptor ID Code (Merchant ID)   : MERCHANT0000001
+DE49  Currency Code, Transaction            : 840</code></pre>
+
+<h2>Get the full source</h2>
+<p>
+  The complete parser — with bounds checking, error handling for malformed
+  messages, and comments throughout — is on GitHub:
+</p>
+<div class="repo-card">
+  <div>
+    <div class="repo-name">ma7m0ud / iso8583-cpp-parser</div>
+    <p>C++17, no dependencies, MIT licensed. Clone it, build it, break it.</p>
+  </div>
+  <a href="https://github.com/ma7m0ud/iso8583-cpp-parser" class="btn btn-outline" target="_blank" rel="noopener">View on GitHub</a>
+</div>
+
+<h2>What this doesn't cover — yet</h2>
+<p>
+  This parser is intentionally narrow, so it's worth being explicit about
+  what it leaves out: secondary bitmaps (DE65–128), LLLVAR fields, binary
+  (non-hex) bitmaps, EMV/ICC TLV parsing for DE55, and building the matching
+  <code>0210</code> response. Those are all reasonable next steps if you want
+  to extend it — and likely where a future post picks up, moving from
+  "parse a message" to "build a minimal payment switch."
+</p>
+
+<div class="article-nav">
+  <a href="../blog.html">&larr; Back to all posts</a>
+</div>
+
+</article>
+
+<footer>
+  <div class="container">
+    &copy; <span id="year"></span> Mahmoud Abdelrahman. Built with plain HTML, CSS &amp; JS, hosted on GitHub Pages.
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/cpp.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/bash.min.js"></script>
+<script>hljs.highlightAll();</script>
+<script src="../assets/js/main.js"></script>
+</body>
+</html>
